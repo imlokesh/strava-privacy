@@ -1,5 +1,5 @@
 node_modules
 build
 *.log
-browser_data.json
+strava_browser.json
 .env
