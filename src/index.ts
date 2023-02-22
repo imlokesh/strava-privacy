@@ -38,7 +38,8 @@ program
     .option("--port <value>", "Port for webhook client. ", "8095")
     .option("--num <value>", "Number of activities to process. ", "20")
     .option("--rules <values...>", "Rules to be used to set privacy on activities. ", ["WeightTraining=only_me"])
-    .option("--watch", "Watch for new activities. ", false);
+    .option("--watch", "Watch for new activities. ", false)
+    .option("--headful", "Run chromium in non-headless mode. ");
 
 program.parse(process.argv);
 const options = program.opts();
@@ -122,7 +123,7 @@ async function LoginToStrava() {
     logger.info('Checking if logged in. ');
 
     browser = browser || await chromium.launch({
-        headless: true,
+        headless: !options.headful,
         // proxy: { server: "127.0.0.1:8888" }
     });
 
