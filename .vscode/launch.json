@@ -13,6 +13,9 @@
             ],
             "outputCapture": "std",
             "program": "${workspaceFolder}\\src\\index.ts",
+            "args": [
+                "--watch",
+            ],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]
