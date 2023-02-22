@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import 'dotenv/config';
 import { Browser, chromium, Page } from 'playwright';
 import winston from 'winston';
@@ -9,6 +11,7 @@ import express from 'express';
 import axios from 'axios';
 import { randomUUID } from 'crypto';
 import formData from 'form-data';
+
 
 const logger = winston.createLogger({
     level: 'info',
@@ -95,19 +98,12 @@ interface OAuthToken {
 
 let oauth: OAuthToken;
 
-let browser: Browser, context: Context, page: Page;
+let browser: Browser | undefined, context: Context | undefined, page: Page;
 
 const LOGIN_URL = 'https://www.strava.com/login';
 const DASHBOARD_URL = 'https://www.strava.com/dashboard';
 const BROWSER_DATA_FILE = 'strava_browser.json';
 const WEBHOOK_PATH = '/strava-privacy-helper'
-
-async function ExitProgram() {
-    logger.info('Exiting program. ');
-
-    await context?.close();
-    await browser?.close();
-}
 
 function delay(delay: number) {
     return new Promise(function (fulfill) {
@@ -126,7 +122,7 @@ async function LoginToStrava() {
     logger.info('Checking if logged in. ');
 
     browser = browser || await chromium.launch({
-        headless: false,
+        headless: true,
         // proxy: { server: "127.0.0.1:8888" }
     });
 
@@ -378,6 +374,9 @@ async function ProcessActivity(activityId: number) {
         for (const act of toProcess) {
             await SetActivityVisibility(act.id, act.visibility);
         }
+
+        await context?.close();
+        await browser?.close();
     }
 })();
 
