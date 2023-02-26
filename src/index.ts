@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import 'dotenv/config';
 import { Browser, chromium, Page } from 'playwright';
 import winston from 'winston';
 import * as fs from 'fs';
@@ -11,7 +10,9 @@ import express from 'express';
 import axios from 'axios';
 import { randomUUID } from 'crypto';
 import formData from 'form-data';
-
+import { exit } from 'process';
+import inquirer from 'inquirer';
+import tablePrompt from 'inquirer-table-prompt';
 
 const logger = winston.createLogger({
     level: 'info',
@@ -20,11 +21,15 @@ const logger = winston.createLogger({
         winston.format.printf((info) => `${info.timestamp} [${info.level}] - ${info.message}`)),
     transports: [
         new winston.transports.Console(),
-        new winston.transports.File({ filename: 'app.log' })
+        new winston.transports.File({ filename: './strava-privacy.log' })
     ],
 });
 
-const ACTIVITY_TYPES = ["alpineski", "backcountryski", "canoeing", "crossfit", "ebikeride", "elliptical", "golf", "handcycle", "hike", "iceskate", "inlineskate", "kayaking", "kitesurf", "nordicski", "ride", "rockclimbing", "rollerski", "rowing", "run", "sail", "skateboard", "snowboard", "snowshoe", "soccer", "stairstepper", "standuppaddling", "surfing", "swim", "velomobile", "virtualride", "virtualrun", "walk", "weighttraining", "wheelchair", "windsurf", "workout", "yoga"];
+inquirer.registerPrompt("table", tablePrompt);
+
+let browser: Browser | undefined, context: Context | undefined, page: Page;
+
+const ACTIVITY_TYPES = ["AlpineSki", "BackcountrySki", "Canoeing", "Crossfit", "EBikeRide", "Elliptical", "Golf", "Handcycle", "Hike", "IceSkate", "InlineSkate", "Kayaking", "Kitesurf", "NordicSki", "Ride", "RockClimbing", "RollerSki", "Rowing", "Run", "Sail", "Skateboard", "Snowboard", "Snowshoe", "Soccer", "StairStepper", "StandUpPaddling", "Surfing", "Swim", "Velomobile", "VirtualRide", "VirtualRun", "Walk", "WeightTraining", "Wheelchair", "Windsurf", "Workout", "Yoga"];
 const ACTIVITY_VISIBILITY_TYPES = ["everyone", "followers_only", "only_me"];
 
 const program = new Command();
@@ -32,90 +37,136 @@ const program = new Command();
 program
     .option("--strava-email <value>", "Strave login email address. ")
     .option("--strava-password <value>", "Strava login password. ")
-    .option("--client-id <value>", "Strava application client id. ")
-    .option("--client-secret <value>", "Strava application client secret. ")
     .option("--ngrok-auth <value>", "Ngrok auth token. ")
     .option("--port <value>", "Port for webhook client. ", "8095")
-    .option("--num <value>", "Number of activities to process. ", "20")
-    .option("--rules <values...>", "Rules to be used to set privacy on activities. ", ["WeightTraining=only_me"])
-    .option("--watch", "Watch for new activities. ", false)
+    .option("--num <value>", "Number of activities to process. ")
+    .option("--rules <values...>", "Rules to be used to set privacy on activities. ")
+    .option("--watch", "Watch for new activities. ")
     .option("--headful", "Run chromium in non-headless mode. ");
+
+interface User {
+    expires_at?: number,
+    refresh_token?: string,
+    access_token?: string,
+    client_id?: string,
+    client_secret?: string,
+    email?: string,
+    password?: string
+}
+
+let user: User = {};
 
 program.parse(process.argv);
 const options = program.opts();
 
-const stravaEmail = options.stravaEmail || process.env.STRAVA_EMAIL;
-const stravaPassword = options.stravaPassword || process.env.STRAVA_PASSWORD;
+if (options.stravaEmail) user.email = options.stravaEmail;
+if (options.stravaPassword) user.password = options.stravaPassword;
 
-const clientId = options.clientId || process.env.CLIENT_ID;
-const clientSecret = options.clientSecret || process.env.CLIENT_SECRET;
-
-if (!stravaEmail || !stravaPassword) {
-    LogAndThrowError('Please specify strava login details. Use -h for options');
-}
-
-if (!clientId || !clientSecret) {
-    LogAndThrowError('Please specify strava client id and client secret from https://www.strava.com/settings/api. Use -h for options');
-}
-
-const maxActivitiesToCheck: number = parseInt(options.num) || 20;
+let maxActivitiesToCheck: number = parseInt(options.num) || 0;
 const port: number = parseInt(options.port) || 8095;
 
-const ngrokAuth = options.ngrokAuth || process.env.NGROK_AUTH;
-
-if (!ngrokAuth && options.watch) {
-    logger.info('No ngrok auth token was found. Webhook service will be limited. ')
-}
+let ngrokAuth = options.ngrokAuth;
 
 const rulesDef: string[] = options.rules;
 const rules = new Map();
 
-if (rulesDef.length < 1) {
-    LogAndThrowError('Please specify at least one rule. ');
-}
+if (rulesDef?.length > 0) {
+    for (const rule of rulesDef) {
+        let split = rule.toLowerCase().split('=');
+        if (split.length != 2) {
+            await LogErrorAndExit(`Invalid rule ${rule}. `);
+        }
 
-for (const rule of rulesDef) {
-    let split = rule.toLowerCase().split('=');
-    if (split.length != 2) {
-        LogAndThrowError(`Invalid rule ${rule}. `);
+        if (!ACTIVITY_TYPES.map(act => act.toLowerCase()).some(t => split[0] == t)) {
+            await LogErrorAndExit(`Invalid activity type in rule ${rule}.`);
+        }
+
+        if (!ACTIVITY_VISIBILITY_TYPES.some(t => split[1] == t)) {
+            await LogErrorAndExit(`Invalid visibility value in rule ${rule}.`);
+        }
+
+        rules.set(split[0], split[1]);
     }
-
-    if (!ACTIVITY_TYPES.some(t => split[0] == t)) {
-        LogAndThrowError(`Invalid activity type in rule ${rule}.`);
-    }
-
-    if (!ACTIVITY_VISIBILITY_TYPES.some(t => split[1] == t)) {
-        LogAndThrowError(`Invalid visibility value in rule ${rule}.`);
-    }
-
-    rules.set(split[0], split[1]);
 }
-
-interface OAuthToken {
-    expires_at: number,
-    refresh_token: string,
-    access_token: string
-}
-
-let oauth: OAuthToken;
-
-let browser: Browser | undefined, context: Context | undefined, page: Page;
 
 const LOGIN_URL = 'https://www.strava.com/login';
 const DASHBOARD_URL = 'https://www.strava.com/dashboard';
 const BROWSER_DATA_FILE = 'strava_browser.json';
 const WEBHOOK_PATH = '/strava-privacy-helper'
 
-function delay(delay: number) {
-    return new Promise(function (fulfill) {
-        setTimeout(fulfill, delay)
-    });
-}
-
 try {
     fs.readFileSync(BROWSER_DATA_FILE);
 } catch (err) {
     fs.writeFileSync(BROWSER_DATA_FILE, '{}');
+}
+
+await GetAppCredentials();
+await GetAccessToken();
+
+await inquirer.prompt([{
+    type: "table",
+    name: "rules",
+    message: "Please choose rules to edit activity visibility",
+    when: () => rules.size == 0,
+    validate: (input) => input.some(i => i != null) || 'Please set at least one rule. ',
+    columns: [
+        {
+            name: "everyone",
+            value: "everyone"
+        },
+        {
+            name: "followers_only",
+            value: "followers_only"
+        },
+        {
+            name: "only_me",
+            value: "only_me"
+        }
+    ],
+    rows: ACTIVITY_TYPES.map(act => {
+        return { name: act, value: act.toLowerCase() }
+    })
+}]).then((answers) => {
+    if (!answers.rules) return;
+
+    let rulesOption = '--rules';
+
+    for (let i = 0; i < ACTIVITY_TYPES.length; i++) {
+        const act = ACTIVITY_TYPES[i];
+        if (answers.rules[i] != null) {
+            rules.set(act.toLowerCase(), answers.rules[i]);
+            rulesOption += ` ${act}=${answers.rules[i]}`;
+        }
+    }
+
+    logger.info(`You can use the following option for subsequent runs: ${rulesOption}`);
+});
+
+if (options.watch) {
+    await RegisterWebhook();
+} else {
+
+    await inquirer.prompt([{
+        type: 'number',
+        message: 'Enter number of activities to process: ',
+        name: 'email',
+        when: () => maxActivitiesToCheck == 0,
+        validate: (input) => input > 0 && input < 1000 || 'Please enter a number between 1 and 999',
+        default: 20
+    }]).then((answers) => {
+        if (answers.maxActivitiesToCheck) maxActivitiesToCheck = answers.maxActivitiesToCheck;
+    });
+
+    let toProcess = await GetRecentActivitesMatchingRules(maxActivitiesToCheck);
+
+    logger.info(`Found ${toProcess.length} activities to process. `);
+
+    for (const act of toProcess) {
+        await SetActivityVisibility(act.id, act.newVisibility);
+    }
+
+    await context?.close();
+    await browser?.close();
 }
 
 async function LoginToStrava() {
@@ -134,7 +185,7 @@ async function LoginToStrava() {
 
     page = page || await context.newPage();
 
-    await page.goto(LOGIN_URL, { waitUntil: 'commit' });
+    await page.goto(DASHBOARD_URL, { waitUntil: 'commit' });
 
     if (page.url() == DASHBOARD_URL) {
 
@@ -142,12 +193,32 @@ async function LoginToStrava() {
 
     } else if (page.url() == LOGIN_URL) {
 
+        await inquirer.prompt([{
+            type: 'input',
+            message: 'Enter Strava Email Address: ',
+            name: 'email',
+            when: () => isNullOrWhiteSpace(user.email),
+            validate: (input) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input) || 'Please enter a valid email address'
+        },
+        {
+            type: 'password',
+            message: 'Enter Strava Password: ',
+            name: 'password',
+            mask: '*',
+            when: () => isNullOrWhiteSpace(user.password) || 'Please enter a valid password',
+            validate: (input) => input.length > 2
+        },
+        ]).then((answers) => {
+            if (answers.email) user.email = answers.email;
+            if (answers.password) user.password = answers.password;
+        });
+
         logger.info('Logging in.');
 
         await page.getByPlaceholder('Your Email').click();
-        await page.getByPlaceholder('Your Email').fill(stravaEmail);
+        await page.getByPlaceholder('Your Email').fill(user.email);
         await page.getByPlaceholder('Password').click();
-        await page.getByPlaceholder('Password').fill(stravaPassword);
+        await page.getByPlaceholder('Password').fill(user.password);
         await page.getByLabel('Remember me').check();
 
         let loginResponsePromise = page.waitForResponse(res => res.url() == 'https://www.strava.com/session' && res.request().method() == 'POST')
@@ -161,14 +232,40 @@ async function LoginToStrava() {
             logger.info('Login successful. ');
             await context.storageState({ path: BROWSER_DATA_FILE });
         } else if (redirectUrl == LOGIN_URL) {
-            throw new Error('Login failed. ');
+            await LogErrorAndExit('Login failed. ');
         } else {
-            throw new Error(`Uknown redirect url ${redirectUrl}. Login failed. `);
+            await LogErrorAndExit(`Uknown redirect url ${redirectUrl}. Login failed. `);
         }
 
     }
     else {
-        throw new Error(`Unknown url detected in login. ${page.url()}`);
+        await LogErrorAndExit(`Unknown url detected in login. ${page.url()}`);
+    }
+}
+
+function isNullOrWhiteSpace(str: string) {
+    return str == null || str.trim() == '';
+}
+
+async function GetAppCredentials() {
+    await LoginToStrava();
+
+    logger.info(`Getting client id and secret`);
+
+    try {
+        await page.goto('https://www.strava.com/settings/api');
+
+        user.client_id = await page.locator('[class*=TableRow]').filter({ hasText: 'Client ID' }).getByText(/[0-9]+/).innerText();
+
+        await page.getByRole('button', { name: 'Show' }).first().click();
+
+        user.client_secret = await page.locator('[class*=TableRow]').filter({ hasText: 'Client Secret' }).locator('p').innerText();
+
+        if (isNullOrWhiteSpace(user.client_id) || isNullOrWhiteSpace(user.client_secret)) {
+            throw new Error('Could not parse client id or secret. ');
+        }
+    } catch (error) {
+        await LogErrorAndExit(`${error} Make sure you've created an app at https://www.strava.com/settings/api and uploaded an icon for the app. `);
     }
 }
 
@@ -176,9 +273,7 @@ async function GetAccessToken() {
 
     logger.info('Getting access token. ');
 
-    await LoginToStrava();
-
-    await page.goto(`https://www.strava.com/oauth/authorize?client_id=${clientId}&redirect_uri=http://localhost:${port}&response_type=code&scope=activity:read_all`);
+    await page.goto(`https://www.strava.com/oauth/authorize?client_id=${user.client_id}&redirect_uri=http://localhost:${port}&response_type=code&scope=activity:read_all`);
 
     let code: string | null = "";
 
@@ -194,19 +289,19 @@ async function GetAccessToken() {
         });
     });
 
-    let res = await axios.post(`https://www.strava.com/api/v3/oauth/token?client_id=${clientId}&client_secret=${clientSecret}&code=${code}&grant_type=authorization_code`);
+    let res = await axios.post(`https://www.strava.com/api/v3/oauth/token?client_id=${user.client_id}&client_secret=${user.client_secret}&code=${code}&grant_type=authorization_code`);
 
-    oauth = { expires_at: res.data.expires_at, access_token: res.data.access_token, refresh_token: res.data.refresh_token };
+    user = { ...user, expires_at: res.data.expires_at, access_token: res.data.access_token, refresh_token: res.data.refresh_token };
 }
 
 async function RefreshToken() {
-    if (oauth.expires_at - Math.round(Date.now() / 1000) < 90) {
+    if (user.expires_at - Math.round(Date.now() / 1000) < 90) {
 
         logger.info('Refreshing access token. ');
 
-        let res = await axios.post(`https://www.strava.com/api/v3/oauth/token?client_id=${clientId}&client_secret=${clientSecret}&grant_type=refresh_token&refresh_token=${oauth.refresh_token}`);
+        let res = await axios.post(`https://www.strava.com/api/v3/oauth/token?client_id=${user.client_id}&client_secret=${user.client_secret}&grant_type=refresh_token&refresh_token=${user.refresh_token}`);
 
-        oauth = { expires_at: res.data.expires_at, access_token: res.data.access_token, refresh_token: res.data.refresh_token };
+        user = { ...user, expires_at: res.data.expires_at, access_token: res.data.access_token, refresh_token: res.data.refresh_token };
     }
 }
 
@@ -244,12 +339,22 @@ async function RegisterWebhook() {
         logger.info('New activities will be automatically processed. ');
     });
 
+    await inquirer.prompt([{
+        type: 'input',
+        message: 'Enter ngrok auth token: ',
+        name: 'ngrok',
+        when: () => isNullOrWhiteSpace(ngrokAuth),
+        validate: (input) => isNullOrWhiteSpace(input) || 'Please enter a valid ngrok token for setting up webhook'
+    }]).then((answers) => {
+        if (answers.ngrok) ngrokAuth = answers.ngrok;
+    });
+
     const url = await ngork.connect({ addr: port, authtoken: ngrokAuth });
     logger.info(`Ngork url registered at ${url}`);
 
     const form = new formData();
-    form.append('client_id', clientId);
-    form.append('client_secret', clientSecret);
+    form.append('client_id', user.client_id);
+    form.append('client_secret', user.client_secret);
     form.append('callback_url', url + WEBHOOK_PATH);
     form.append('verify_token', verifyToken);
 
@@ -259,10 +364,10 @@ async function RegisterWebhook() {
             logger.info(`Webhook registered with strava. ID = ${res.data.id}`);
         }
         else {
-            throw new Error(`Unknown response. ${JSON.stringify(res.data)}`);
+            await LogErrorAndExit(`Unknown response. ${JSON.stringify(res.data)}`);
         }
     } catch (error: any) {
-        LogAndThrowError(`Error registering webhook. ${error} ${JSON.stringify(error.response.data)}`);
+        await LogErrorAndExit(`Error registering webhook. ${error} ${JSON.stringify(error.response.data)}`);
     }
 }
 
@@ -271,7 +376,7 @@ async function UnregisterWebhook() {
     logger.info(`Checking existing webhook. `);
 
     try {
-        let res = await axios.get(`https://www.strava.com/api/v3/push_subscriptions?client_id=${clientId}&client_secret=${clientSecret}`);
+        let res = await axios.get(`https://www.strava.com/api/v3/push_subscriptions?client_id=${user.client_id}&client_secret=${user.client_secret}`);
         let id = res.data[0]?.id;
         if (!id) {
             logger.info('No existing webhook found. ');
@@ -284,24 +389,25 @@ async function UnregisterWebhook() {
 
         try {
             const form = new formData();
-            form.append('client_id', clientId);
-            form.append('client_secret', clientSecret);
+            form.append('client_id', user.client_id);
+            form.append('client_secret', user.client_secret);
 
-            let res = await axios.delete(`https://www.strava.com/api/v3/push_subscriptions/${id}?client_id=${clientId}&client_secret=${clientSecret}`);
+            let res = await axios.delete(`https://www.strava.com/api/v3/push_subscriptions/${id}?client_id=${user.client_id}&client_secret=${user.client_secret}`);
 
             logger.info(`Webhook unregistered succesfuly. `);
         } catch (error: any) {
-            LogAndThrowError(`Error unregistering webhook. ${error} ${JSON.stringify(error.response.data)}`);
+            await LogErrorAndExit(`Error unregistering webhook. ${error} ${JSON.stringify(error.response.data)}`);
         }
 
     } catch (error: any) {
-        LogAndThrowError(`Error checking existing webhook. ${error}`);
+        await LogErrorAndExit(`Error checking existing webhook. ${error}`);
     }
 }
 
+
 interface ActivityVisibility {
     id: number,
-    visibility: string
+    newVisibility: string
 }
 
 async function GetRecentActivitesMatchingRules(max: number): Promise<Array<ActivityVisibility>> {
@@ -310,7 +416,7 @@ async function GetRecentActivitesMatchingRules(max: number): Promise<Array<Activ
 
     let res = await axios.get(`https://www.strava.com/api/v3/athlete/activities?per_page=${max}`, {
         headers: {
-            'Authorization': `Bearer ${oauth.access_token}`
+            'Authorization': `Bearer ${user.access_token}`
         }
     });
 
@@ -319,7 +425,7 @@ async function GetRecentActivitesMatchingRules(max: number): Promise<Array<Activ
     for (const activity of res.data) {
         const activityType = activity.type.toLowerCase();
         if (rules.has(activityType) && rules.get(activityType) != activity.visibility) {
-            result.push({ id: activity.id, visibility: rules.get(activityType) });
+            result.push({ id: activity.id, newVisibility: rules.get(activityType) });
         }
     }
 
@@ -345,7 +451,7 @@ async function ProcessActivity(activityId: number) {
     await RefreshToken();
     let res = await axios.get(`https://www.strava.com/api/v3/activities/${activityId}`, {
         headers: {
-            'Authorization': `Bearer ${oauth.access_token}`
+            'Authorization': `Bearer ${user.access_token}`
         }
     });
 
@@ -361,27 +467,15 @@ async function ProcessActivity(activityId: number) {
     }
 }
 
-(async () => {
-
-    await GetAccessToken();
-
-    if (options.watch) {
-        await RegisterWebhook();
-    } else {
-        let toProcess = await GetRecentActivitesMatchingRules(maxActivitiesToCheck);
-
-        logger.info(`Found ${toProcess.length} activities to process. `);
-
-        for (const act of toProcess) {
-            await SetActivityVisibility(act.id, act.visibility);
-        }
-
-        await context?.close();
-        await browser?.close();
-    }
-})();
-
-function LogAndThrowError(msg: string) {
+async function LogErrorAndExit(msg: string) {
     logger.error(msg);
-    throw new Error(msg);
+    await context?.close();
+    await browser?.close();
+    exit(1);
+}
+
+function delay(delay: number) {
+    return new Promise(function (fulfill) {
+        setTimeout(fulfill, delay)
+    });
 }
