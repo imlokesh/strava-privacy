@@ -2,7 +2,7 @@
 	"name": "strava-privacy",
 	"description": "Automatically change privacy settings for new and existing activities on Strava based on activity type. ",
 	"license": "MIT",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"type": "module",
 	"contributors": [
 		"Lokesh Sharma <me@imlokesh.com>"
