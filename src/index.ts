@@ -149,7 +149,7 @@ if (options.watch) {
     await inquirer.prompt([{
         type: 'number',
         message: 'Enter number of activities to process: ',
-        name: 'email',
+        name: 'maxActivitiesToCheck',
         when: () => maxActivitiesToCheck == 0,
         validate: (input) => input > 0 && input < 1000 || 'Please enter a number between 1 and 999',
         default: 20
