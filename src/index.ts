@@ -334,9 +334,13 @@ async function RegisterWebhook() {
         res.sendStatus(200);
     });
 
-    app.listen(port, () => {
-        logger.info(`Webhook server running at http://localhost:${port}`);
-        logger.info('New activities will be automatically processed. ');
+
+    await new Promise<void>((resolve) => {
+        app.listen(port, () => {
+            logger.info(`Webhook server running at http://localhost:${port}`);
+            logger.info('New activities will be automatically processed. ');
+            resolve();
+        });
     });
 
     await inquirer.prompt([{
