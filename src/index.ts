@@ -348,7 +348,7 @@ async function RegisterWebhook() {
         message: 'Enter ngrok auth token: ',
         name: 'ngrok',
         when: () => isNullOrWhiteSpace(ngrokAuth),
-        validate: (input) => isNullOrWhiteSpace(input) || 'Please enter a valid ngrok token for setting up webhook'
+        validate: (input) => !isNullOrWhiteSpace(input) || 'Please enter a valid ngrok token for setting up webhook'
     }]).then((answers) => {
         if (answers.ngrok) ngrokAuth = answers.ngrok;
     });
