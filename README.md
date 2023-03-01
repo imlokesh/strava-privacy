@@ -36,7 +36,7 @@ Options:
 
 Usage is pretty straightforward but there are a few pre-requisites:
 - Strava user login details because the app has to use both strava api and browser automation.
-- You must create an app at https://www.strava.com/settings/api. Also make sure to add an icon to the app, otherwise it would not be usable. 
+- You must create an app at https://www.strava.com/settings/api. Use `localhost` for callback domain. Also make sure to add an icon to the app, otherwise it would not be usable. 
 - In order to use in watch mode, you'll need a free [ngrok](https://ngrok.com/) auth token. 
 
 ![strava-privacy screenshot](/screenshot.png?raw=true "Strava Privacy Helper")
