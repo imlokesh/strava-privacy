@@ -338,7 +338,6 @@ async function RegisterWebhook() {
     await new Promise<void>((resolve) => {
         app.listen(port, () => {
             logger.info(`Webhook server running at http://localhost:${port}`);
-            logger.info('New activities will be automatically processed. ');
             resolve();
         });
     });
@@ -366,6 +365,7 @@ async function RegisterWebhook() {
         let res = await axios.post('https://www.strava.com/api/v3/push_subscriptions', form, { headers: form.getHeaders() })
         if (res.data.id) {
             logger.info(`Webhook registered with strava. ID = ${res.data.id}`);
+            logger.info('New activities will be automatically processed. ');
         }
         else {
             await LogErrorAndExit(`Unknown response. ${JSON.stringify(res.data)}`);
