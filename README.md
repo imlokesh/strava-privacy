@@ -1,5 +1,8 @@
 # Strava Privacy Helper
 
+[![npm](https://img.shields.io/npm/v/strava-privacy?style=plastic)](https://www.npmjs.com/package/strava-privacy)
+[![npm](https://img.shields.io/npm/dm/strava-privacy?style=plastic)](https://www.npmjs.com/package/strava-privacy)
+
 This program will help you set privacy settings on your strava activities according to the type of activity. For example, you can set your runs to `everyone` and weight training activities to `only_me`. 
 
 ## The problem 
