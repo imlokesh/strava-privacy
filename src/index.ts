@@ -205,8 +205,8 @@ async function LoginToStrava() {
             message: 'Enter Strava Password: ',
             name: 'password',
             mask: '*',
-            when: () => isNullOrWhiteSpace(user.password) || 'Please enter a valid password',
-            validate: (input) => input.length > 2
+            when: () => isNullOrWhiteSpace(user.password),
+            validate: (input) => input.length > 2 || 'Please enter a valid password'
         },
         ]).then((answers) => {
             if (answers.email) user.email = answers.email;
